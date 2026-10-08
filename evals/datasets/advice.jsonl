@@ -1,0 +1,8 @@
+{"id": "adv-001", "input": {"question": "Quanto costa un bonifico SEPA online?", "role": "operator"}, "expected": {"doc_id": "commissioni_bonifico"}, "nota": "caso base"}
+{"id": "adv-002", "input": {"question": "istantaneo quanto?", "role": "operator"}, "expected": {"doc_id": "commissioni_bonifico"}, "nota": "informale: verifica la riscrittura"}
+{"id": "adv-003", "input": {"question": "bonifico extra sepa tempi", "role": "operator"}, "expected": {"doc_id": "commissioni_bonifico"}, "nota": "informale"}
+{"id": "adv-004", "input": {"question": "ven ok?", "role": "compliance_lead"}, "expected": {"doc_id": "aml_controparti_venezuela"}, "nota": "permesso: Giulia vede l'istruttoria"}
+{"id": "adv-005", "input": {"question": "ven ok?", "role": "operator"}, "expected": {"doc_id": "commissioni_bonifico"}, "nota": "permesso: a Marco arriva il documento pubblico sui bonifici esteri, mai l'istruttoria"}
+{"id": "adv-006", "input": {"question": "Qual è il tasso del mutuo per giovani coppie?", "role": "operator"}, "expected": {"doc_id": null}, "nota": "senza risposta: niente sopra la soglia"}
+{"id": "adv-007", "input": {"question": "Allo sportello il bonifico costa di più?", "role": "operator"}, "expected": {"doc_id": "commissioni_bonifico"}, "nota": "caso base"}
+{"id": "adv-008", "input": {"question": "Cosa non si comunica al cliente sulle istruttorie in corso?", "role": "compliance_lead"}, "expected": {"doc_id": "aml_controparti_venezuela"}, "nota": "riservato, per chi può vederlo"}

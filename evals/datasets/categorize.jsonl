@@ -1,0 +1,10 @@
+{"id": "cat-001", "input": {"description": "Bolletta Enel Energia", "amount": 87.40}, "expected": {"category": "UTILITIES"}, "nota": "caso base, fornitore noto"}
+{"id": "cat-002", "input": {"description": "Esselunga Milano", "amount": 64.15}, "expected": {"category": "GROCERIES"}, "nota": "caso base"}
+{"id": "cat-003", "input": {"description": "Trenitalia Milano-Roma", "amount": 89.90}, "expected": {"category": "TRANSPORT"}, "nota": "caso base"}
+{"id": "cat-004", "input": {"description": "Pizzeria da Gino", "amount": 32.50}, "expected": {"category": "RESTAURANTS"}, "nota": "caso base"}
+{"id": "cat-005", "input": {"description": "Netflix", "amount": 12.99}, "expected": {"category": "ENTERTAINMENT"}, "nota": "abbonamento"}
+{"id": "cat-006", "input": {"description": "PAGAMENTO POS 4412 MILANO", "amount": 23.50}, "expected": {"category": "OTHER"}, "nota": "descrizione opaca: non si può dedurre, OTHER è la risposta corretta"}
+{"id": "cat-007", "input": {"description": "Fastweb abbonamento", "amount": 29.95}, "expected": {"category": "UTILITIES"}, "nota": "telefonia: utenza, non intrattenimento"}
+{"id": "cat-008", "input": {"description": "ATM abbonamento mensile", "amount": 39.00}, "expected": {"category": "TRANSPORT"}, "nota": "sigla: ATM è il trasporto di Milano, non lo sportello"}
+{"id": "cat-009", "input": {"description": "Commissione bonifico", "amount": 0.10}, "expected": {"category": "OTHER"}, "nota": "un costo bancario: nessuna delle cinque categorie"}
+{"id": "cat-010", "input": {"description": "Coop Lombardia", "amount": 38.60}, "expected": {"category": "GROCERIES"}, "nota": "caso base"}

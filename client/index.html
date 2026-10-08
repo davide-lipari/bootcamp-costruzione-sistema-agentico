@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- client/index.html — la pagina di prova: chiama l'API da un'altra origine, come farà un frontend -->
+<meta charset="utf-8">
+<title>LipariBank AI — prova</title>
+<form id="f">
+  <input id="d" value="Bonifico Enel Energia" size="40">
+  <input id="a" value="87.40" size="8">
+  <button>Classifica</button>
+</form>
+<pre id="out"></pre>
+<script>
+  document.getElementById("f").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const r = await fetch("http://localhost:8000/api/ai/categorize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description: d.value, amount: Number(a.value) }),
+    });
+    out.textContent = r.status + "\n" + JSON.stringify(await r.json(), null, 2);
+  });
+</script>

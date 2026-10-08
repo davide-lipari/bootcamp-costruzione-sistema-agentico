@@ -1,0 +1,82 @@
+[project]
+name = "lipari-bank-ai"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    # G2 — il servizio
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.54.0",
+    "pydantic-settings==2.15.0",
+    "email-validator==2.3.0",
+    # G3 — la persistenza
+    "sqlalchemy[asyncio]==2.1.1",
+    "asyncpg==0.31.0",
+    "alembic==1.20.0",
+    "pgvector==0.5.0",
+    # G4 — i modelli (openai 3.3.0 e' il massimo compatibile con instructor 1.17)
+    "openai==3.3.0",
+    "anthropic==1.8.0",
+    "instructor==1.17.0",
+    # G6 — autenticazione e limiti
+    "pyjwt==2.15.0",
+    "pwdlib[argon2]==0.3.1",
+    "python-multipart==0.0.32",
+    "slowapi==0.1.10",
+    # G8 — il server MCP
+    "fastmcp==4.0.10",
+    "sentence-transformers<6",
+    "einops>=0.8.2",
+    "transformers<5",
+    # src/lc — la catena, l'agente e il modello LangChain
+    "langchain==1.4.3",
+    "langgraph==1.2.14",
+    "langchain-openai==1.6.7",
+]
+
+[dependency-groups]
+dev = [
+    "ruff==0.16.9",
+    "mypy==2.3.1",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    "httpx==0.28.1",
+    "aiosqlite==0.22.1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# le migration le scrive Alembic dal suo modello: si leggono, non si riformattano
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B", "ANN", "ASYNC", "UP"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Body", "fastapi.Header"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN001", "ANN201"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+disallow_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+# Una funzione di test non restituisce niente e riceve fixture: annotarla è rumore, ed è la
+# stessa regola che ruff applica ai test qui sopra. Il corpo si controlla comunque.
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true

@@ -1,0 +1,34 @@
+# .github/workflows/eval.yml
+name: eval
+
+on:
+  workflow_dispatch:              # il pulsante "Run workflow" nell'interfaccia
+  schedule:
+    - cron: "0 6 * * 1"           # ogni lunedì alle 06:00 UTC
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20           # un eval bloccato non resta acceso a spese tue
+    services:
+      postgres:                   # un Postgres usa-e-getta per questo job
+        image: pgvector/pgvector:pg16
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: lipari_ai }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-retries 5
+
+    env:                          # a livello di job: le vedono TUTTI i passi
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/lipari_ai
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      # Settings lo pretende; qui non si firma nessun token vero, ma deve esserci
+      JWT_SECRET: segreto-della-ci-che-non-firma-niente-di-vero
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run alembic upgrade head
+      - run: uv run python -m scripts.seed_accounts    # i clienti e i conti delle traiettorie
+      - run: uv run python -m evals.ingest_fixtures    # i documenti dell'advice
+      - run: uv run python -m evals.runner             # ← se esce ≠0, il job fallisce
