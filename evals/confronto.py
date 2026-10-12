@@ -112,7 +112,8 @@ async def confronta(
 async def main() -> int:
     if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(errors="replace")
-    from evals.implementazioni import AgentePrebuilt, Catena, CicloAMano
+    from evals.implementazioni import AgentePrebuilt, Catena, CicloAMano, Grafo
+    from src.agents.supervisor import MODELLO_TRIAGE
     from src.config import settings
     from src.lc.modelli import modello_chat
     from src.llm.factory import get_embedder, get_openai
@@ -123,6 +124,8 @@ async def main() -> int:
         CicloAMano(openai, modello),
         Catena(llm, modello),
         AgentePrebuilt(llm, modello),
+        # il triage con il modello del supervisor del repository
+        Grafo(llm, modello_chat(MODELLO_TRIAGE), modello),
     ]
     risultati = await confronta(DATASETS / "agent_traiettorie.jsonl", impls, get_embedder(), openai)
     for nome, m in risultati.items():

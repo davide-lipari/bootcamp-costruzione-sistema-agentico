@@ -9,6 +9,7 @@ from alembic import context
 from src.config import settings
 from src.db import models  # noqa: F401 — importarli riempie Base.metadata
 from src.db.session import Base
+from src.lg.grafo import fuori_dalle_migration
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -51,6 +52,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_object=fuori_dalle_migration,  # le tabelle del checkpointer stanno fuori
     )
 
     with context.begin_transaction():
@@ -58,7 +60,11 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_object=fuori_dalle_migration,  # le tabelle del checkpointer stanno fuori
+    )
 
     with context.begin_transaction():
         context.run_migrations()

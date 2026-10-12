@@ -35,6 +35,16 @@ SENZA_APPROVAZIONE = (
     "non è stata eseguita. Non ritentarla: riferisci all'utente che va richiesta dal flusso "
     "con approvazione."
 )
+# i due tetti parlano con la stessa voce del ciclo, e anche il grafo li usa da qui:
+# «il tetto non è una risposta», e lo si capisce leggendolo
+MESSAGGIO_BUDGET = (
+    "Ho interrotto l'elaborazione perché la richiesta ha superato il budget previsto. "
+    "Prova a formularla in modo più circoscritto."
+)
+MESSAGGIO_PASSI = (
+    "Non ho completato la richiesta entro i passi previsti: la risposta non c'è. "
+    "Riformula la domanda in modo più specifico, o dividila in domande più semplici."
+)
 
 
 @dataclass
@@ -89,10 +99,7 @@ async def run_agent(
             return run
         if run.cost_eur > BUDGET_PER_RUN:  # uscita 3: il budget, prima di altri tool
             run.stopped_by = "budget"
-            run.reply = (
-                "Ho interrotto l'elaborazione perché la richiesta ha superato il "
-                "budget previsto. Prova a formularla in modo più circoscritto."
-            )
+            run.reply = MESSAGGIO_BUDGET
             return run
 
         # PRIMA l'assistant con le chiamate, poi i risultati: altrimenti l'API rifiuta
@@ -131,10 +138,7 @@ async def run_agent(
             messaggi.append({"role": "tool", "tool_call_id": call.id, "content": esito})
 
     run.stopped_by = "max_steps"  # uscita 2: tetto raggiunto, NON è una risposta
-    run.reply = (
-        "Non ho completato la richiesta entro i passi previsti: la risposta non c'è. "
-        "Riformula la domanda in modo più specifico, o dividila in domande più semplici."
-    )
+    run.reply = MESSAGGIO_PASSI
     return run
 
 

@@ -13,6 +13,7 @@ from src.auth.deps import UserContext
 from src.config import settings
 
 # il modello del triage è configurabile: stesso fornitore del resto, ma il più piccolo che c'è
+MODELLO_TRIAGE = settings.triage_model  # il grafo e l'harness lo prendono da qui
 
 PROMPT_TRIAGE = """Classifica la domanda di un operatore di filiale. Rispondi con una parola sola:
 dati_conto  se riguarda clienti, conti, saldi o movimenti;

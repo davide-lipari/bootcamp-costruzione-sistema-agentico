@@ -37,7 +37,9 @@ Il caricamento dei documenti calcola gli embedding con il modello configurato, q
 uv run pytest -q          # sul database lipari_ai_test
 uv run mypy .
 uv run ruff check . && uv run ruff format --check .
-uv run python -m evals.runner   # l'harness: chiama il modello vero, e costa
+uv run python -m evals.runner        # l'harness: chiama il modello vero, e costa
+uv run python -m evals.confronto     # le quattro implementazioni sulle stesse traiettorie
+uv run python -m scripts.disegna_grafo   # il grafo del supervisor, disegnato dal suo codice
 ```
 
 I test non chiamano nessun modello: usano i finti di `tests/finti.py`.
@@ -48,10 +50,78 @@ I test non chiamano nessun modello: usano i finti di `tests/finti.py`.
 |---|---|
 | `src/api/` | gli endpoint: chat, consulenza sulle policy, agente, conti, movimenti, autenticazione |
 | `src/agents/` | il ciclo dell'agente scritto a mano, i tool, la sosta per l'approvazione, il supervisor, il client MCP |
+| `src/lg/` | il supervisor come grafo LangGraph: lo stato, la tabella dei percorsi, il checkpointer di Postgres |
 | `src/services/` | retrieval con i permessi, RAG con le citazioni, ingestione, categorizzazione |
+| `scripts/` | seed, ingestione dei documenti, disegno del grafo |
+| `docs/` | il disegno del grafo (`grafo.md`), generato dal codice |
 | `liparibank_mcp/` | il server MCP, che verifica l'identità da un token firmato |
 | `evals/` | l'harness, i casi in `datasets/`, il cancello con le soglie |
 | `data/docs/` | il corpus: le sottocartelle dicono chi può leggere (`compliance_only/`) |
+
+## Il grafo del supervisor
+
+Il supervisor — chi lavora su una domanda, con quali tool e in che ordine — è un grafo
+LangGraph in `src/lg/`: la tabella `PERCORSI` dichiara il flusso, `instrada` lo segue mettendo
+i tetti prima di tutto, e la sosta per l'approvazione è un `interrupt()` appoggiato a Postgres.
+Non l'ho disegnato a mano: nodi e collegamenti vengono dal grafo compilato, e
+`uv run python -m scripts.disegna_grafo` li ritrae in `docs/grafo.md` (Mermaid sotto, tabella
+dei percorsi nel file). La spiegazione passo passo è in [`spiegazione_grafo.md`](spiegazione_grafo.md).
+
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	triage(triage)
+	dati_conto(dati_conto)
+	policy(policy)
+	prepara(prepara)
+	chiedi(chiedi)
+	scrivi(scrivi)
+	sintesi(sintesi)
+	chiusura(chiusura)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> triage;
+	chiedi -.-> chiusura;
+	chiedi -.-> scrivi;
+	chiedi -.-> sintesi;
+	dati_conto -.-> chiusura;
+	dati_conto -.-> policy;
+	dati_conto -.-> sintesi;
+	policy -.-> chiusura;
+	policy -.-> prepara;
+	policy -.-> sintesi;
+	prepara -.-> chiedi;
+	prepara -.-> chiusura;
+	prepara -.-> sintesi;
+	scrivi -.-> chiusura;
+	scrivi -.-> sintesi;
+	triage -.-> chiusura;
+	triage -.-> dati_conto;
+	triage -.-> policy;
+	triage -.-> sintesi;
+	chiusura --> __end__;
+	sintesi --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+
+```
+
+Quando l'importo di una segnalazione supera la soglia, `chiedi` chiama `interrupt()`: il grafo
+si ferma lì, e ad aspettare è il **thread** nel checkpointer
+(`checkpointer_postgres()` in `src/lg/grafo.py`, un `AsyncPostgresSaver` per richiesta). Il
+thread è `f"{username}:{uuid4()}"`, generato server-side, quindi due run non possono
+incrociarsi: non condividono niente. Le quattro tabelle del checkpointer sono fuori dalle
+migration (`fuori_dalle_migration` in `alembic/env.py`): `revision --autogenerate` non deve
+proporsi di cancellarle, e con le soste che contengono.
+
+Il motore HTTP (`/api/ai/agent`) continua a girare sul ciclo scritto a mano
+(`src/agents/loop.py`): il grafo è la quarta implementazione dello stesso comportamento,
+misurata dalle eval insieme alle altre tre e coperta dai suoi test.
 
 ## Misure
 
@@ -184,4 +254,32 @@ traiettorie  0.89 (8/9)  soglia 0.80  ok            costo EUR 0.0027
   a un passo oscilla di poche unità alla quinta cifra).
 - Un fallimento che non c'entra col tetto: traj-003 non supera `citazione` in nessuna delle
   due esecuzioni.
+
+### Col grafo — 12/10/2026
+
+Stesso dataset (9 casi), stesso modello, stessa macchina: `uv run python -m evals.confronto`
+con le quattro implementazioni, il grafo compreso. «ricerche» = `search_documents` eseguite su
+tutta la serie.
+
+| implementazione | punteggio | sopra soglia 0.80 | costo totale EUR | ricerche |
+|---|---|---|---|---|
+| ciclo (a mano) | 0.89 (8/9) | sì | 0.0024 | 6 |
+| catena | 0.22 (2/9) | no | 0.0012 | 9 |
+| agente prebuilt | 0.89 (8/9) | sì | 0.0026 | 7 |
+| grafo | 0.33 (3/9) | no | 0.0045 | 6 |
+
+- Il grafo paga il suo ordine: il triage e la sintesi sono chiamate vere che il ciclo non ha,
+  e i `passi_max` del dataset (1–6) sono tarati sul ciclo. Nei casi a un salto il
+  sovrapprezzo strutturale basta a farlo uscire su `passi` (5–6 chiamate contro 3–4), mentre
+  passa i tre casi multi-hop col budget più largo (traj-006, 008, 009). È lo stesso
+  comportamento che il banco di `tests/test_g2_langgraph.py` fissa con il modello fintto:
+  1 sui tre casi del Giorno 1, con `passi` violato su saldo e segnalazione.
+- Un fallimento di natura diversa: su traj-004 (la segnalazione da approvare) il triage ha
+  scelto un'altra strada e la sosta non è partita — `tool_richiesti` e `terminazione` violati.
+  Sul modello vero il triage è non deterministico; nel test la risposta è un copione.
+- La catena resta la più economica e la meno giusta: 9 ricerche fisse e 7 casi falliti.
+- L'ordine di costo fra ciclo e agente lo decide il modello non deterministico, non
+  l'architettura: fra 0.0024 e 0.0026 EUR su nove casi. Quello che questi numeri dicono con
+  certezza è il punteggio e quante ricerche servono.
+- Il per-caso lo stampa lo stesso comando; le soglie del cancello sono in `evals/runner.py`.
 

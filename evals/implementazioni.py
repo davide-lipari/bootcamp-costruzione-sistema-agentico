@@ -1,4 +1,4 @@
-# evals/implementazioni.py — tre modi di rispondere alla stessa domanda, dietro un contratto solo
+# evals/implementazioni.py — quattro modi di rispondere alla stessa domanda, un contratto solo
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Protocol
@@ -16,6 +16,7 @@ from src.agents.tools import build_tools_for
 from src.auth.deps import UserContext
 from src.lc.agente import chiamate_vere, come_e_finita, costruisci_agente
 from src.lc.catena import RispostaCitata, costruisci_catena, fonti_verificate
+from src.lg.grafo import costruisci_grafo, stato_iniziale, thread_per
 from src.services.retrieval_service import RetrievalResult
 
 
@@ -131,3 +132,38 @@ class AgentePrebuilt:
             if isinstance(m, ToolMessage) and m.name == "search_documents" and m.status == "success"
         )
         return Esito(testo, chiamati, len(vere), stopped_by, costo, ricerche)
+
+
+# ---------------------------------------------------------------- 4. il grafo
+class Grafo:
+    nome = "grafo"
+
+    def __init__(self, llm: BaseChatModel, llm_triage: BaseChatModel, model: str) -> None:
+        self.llm, self.llm_triage, self.model = llm, llm_triage, model
+
+    async def rispondi(self, domanda: str, utente: UserContext, deps: Deps) -> Esito:
+        # la misura non deve sopravvivere a niente: qui il salvataggio in memoria è giusto
+        grafo = costruisci_grafo(
+            utente, deps, self.llm, self.llm_triage, InMemorySaver(), modello=self.model
+        )
+        config: Any = {"configurable": {"thread_id": thread_per(utente)}}
+        stato: dict[str, Any] = await grafo.ainvoke(stato_iniziale(domanda, utente), config)
+        chiamati = [t for c in stato.get("contributi", []) for t in c["tool_calls"]]
+        ricerche = sum(1 for t in chiamati if t == "search_documents")
+        if stato.get("__interrupt__"):  # la segnalazione è chiesta, e aspetta una persona
+            return Esito(
+                "In attesa di approvazione.",
+                [*chiamati, "apri_segnalazione_compliance"],
+                stato["passi"],
+                "awaiting_approval",
+                stato["costo_eur"],
+                ricerche,
+            )
+        return Esito(
+            stato["risposta"],
+            chiamati,
+            stato["passi"],
+            stato["stopped_by"],
+            stato["costo_eur"],
+            ricerche,
+        )
