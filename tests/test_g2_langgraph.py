@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
+import httpx2
 import pytest
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
@@ -49,6 +50,28 @@ SEGNALA_DOMANDA = "apri una segnalazione: due bonifici verso Panama"
 SEGNALA_PICCOLO = json.dumps(  # sotto soglia: il grafo scrive senza chiedere a nessuno
     {"account_id": CONTO_DI_MARCO, "motivo": "Due bonifici verso Panama", "importo": "100"}
 )
+
+
+def copione_segnalazione() -> list[httpx2.Response]:
+    """Il cammino di una segnalazione sopra soglia fino alla proposta: il triage, i due
+    specialisti, e la chiamata strutturata che prepara gli argomenti. La sosta viene dopo."""
+    return [
+        completion("segnalazione"),
+        tool("find_customer_accounts", '{"customer_id": "C-10234"}'),
+        tool("get_account_balance", f'{{"account_id": "{CONTO_DI_MARCO}"}}'),
+        completion("Due bonifici verso Panama."),
+        tool("search_documents", '{"query": "segnalazione compliance"}'),
+        completion("Obbligatoria sopra soglia."),
+        tool("SegnalazioneArgs", SEGNALA_25K),
+    ]
+
+
+async def alert() -> int:
+    """Quante segnalazioni ci sono adesso: il conto che guarda chi aspetta la scrittura."""
+    from sqlalchemy import text
+
+    async with AsyncSessionLocal() as s:
+        return int((await s.execute(text("select count(*) from compliance_alerts"))).scalar_one())
 
 
 def _stato(**campi: object) -> StatoBanca:
@@ -434,7 +457,7 @@ async def _la_sosta_sopravvive() -> None:
 def test_la_tabella_dichiara_un_insime_chiuso_di_percorsi() -> None:
     """Ogni percorso comincia da uno specialista, e segnalazione passa dalla sosta prima della
     scrittura: l'ordine sta nella tabella, non nel codice dei nodi."""
-    assert set(PERCORSI) == {"dati_conto", "policy", "entrambi", "segnalazione"}
+    assert set(PERCORSI) == {"dati_conto", "policy", "entrambi", "segnalazione", "istruttoria"}
     for percorso in PERCORSI.values():
         assert percorso[0] in {"dati_conto", "policy"}
     assert PERCORSI["segnalazione"] == [

@@ -1,11 +1,12 @@
 # src/lg/stato.py — il contratto fra i nodi: cosa entra, cosa si accumula, cosa si decide
+from dataclasses import dataclass
 from decimal import Decimal
 from operator import add
 from typing import Annotated, Any, Literal, TypedDict
 
-Instradamento = Literal["dati_conto", "policy", "entrambi", "segnalazione"]
+Instradamento = Literal["dati_conto", "policy", "entrambi", "segnalazione", "istruttoria"]
 Uscita = Literal["model", "budget", "max_steps"]  # l'attesa la riconosce lo strato HTTP
-Specialista = Literal["dati_conto", "policy", "segnalazione"]
+Specialista = Literal["dati_conto", "policy", "segnalazione", "istruttoria"]
 
 
 class Contributo(TypedDict):
@@ -40,3 +41,12 @@ class StatoBanca(TypedDict):
     decisione: Decisione
     risposta: str
     stopped_by: Uscita
+
+
+@dataclass(frozen=True)
+class Contesto:
+    """Quello che vale per un'invocazione e non è stato del grafo: lo stile e il budget."""
+
+    stile: Literal["breve", "dettagliato"] = "breve"
+    sforzo: Literal["minimal", "low", "medium", "high"] = "low"  # quanto ragiona l'istruttoria
+    max_token_istruttoria: int = 4000  # ragionamento compreso: si paga come uscita

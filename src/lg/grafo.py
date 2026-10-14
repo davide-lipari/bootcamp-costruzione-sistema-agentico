@@ -12,8 +12,10 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 from pydantic import ValidationError
 
@@ -26,11 +28,17 @@ from src.auth.deps import UserContext
 from src.config import settings
 from src.lc.agente import chiamate_vere, come_e_finita
 from src.lc.strumenti import in_fila
-from src.lg.stato import Contributo, Decisione, Instradamento, StatoBanca
+from src.lg.stato import Contesto, Contributo, Decisione, Instradamento, StatoBanca
 
 MAX_PASSI = 12  # chiamate al modello in tutto il grafo: il piano più lungo ne fa dieci
 PASSI_SPECIALISTA = 4
-ISTRADAMENTI: tuple[Instradamento, ...] = ("dati_conto", "policy", "entrambi", "segnalazione")
+ISTRADAMENTI: tuple[Instradamento, ...] = (
+    "dati_conto",
+    "policy",
+    "entrambi",
+    "segnalazione",
+    "istruttoria",
+)
 
 # il flusso, dichiarato: per ogni tipo di domanda, chi lavora e in che ordine
 PERCORSI: dict[Instradamento, list[str]] = {
@@ -39,6 +47,8 @@ PERCORSI: dict[Instradamento, list[str]] = {
     "entrambi": ["dati_conto", "policy"],
     # prima i dati del conto e la policy, poi la proposta, la sosta, e solo dopo la scrittura
     "segnalazione": ["dati_conto", "policy", "prepara", "chiedi", "scrivi"],
+    # un'analisi che chiede di ragionare: prima i conti, poi lo specialista sul modello che ragiona
+    "istruttoria": ["dati_conto", "istruttoria"],
 }
 SERVONO_LA_PROPOSTA = {"chiedi", "scrivi"}
 
@@ -46,6 +56,7 @@ PROMPT_TRIAGE = """Classifica la domanda di un operatore di filiale. Rispondi co
 dati_conto    se riguarda clienti, conti, saldi o movimenti;
 policy        se riguarda regole, soglie, procedure o adempimenti;
 segnalazione  se l'operatore chiede di aprire una segnalazione alla Compliance;
+istruttoria   se chiede di analizzare i movimenti di un conto per capire se vanno segnalati;
 entrambi      se servono dati e regole insieme, o se non sei sicuro."""
 
 PROMPT_PREPARA = """Prepara gli argomenti di una segnalazione alla Compliance a partire dalla
@@ -61,8 +72,41 @@ class Nodo(Protocol):
     def __call__(self, state: StatoBanca) -> Awaitable[dict[str, Any]]: ...
 
 
+# il listino del fornitore, con la data nel commento del modulo da cui viene: il modello che
+# ragiona è già dentro, perché è il modello del giorno. Il ragionamento si paga come uscita
+PREZZI = {**PREZZI_PER_1K}
+
+PROMPT_ISTRUTTORIA = """Sei lo specialista delle istruttorie di LipariBank. Leggi i movimenti del
+conto con il tool, cerca la policy che li riguarda, e di' se ci sono elementi da segnalare: quali
+movimenti, con date e importi esatti, e quale documento, citato fra parentesi quadre. Non decidi tu
+se aprire una segnalazione: lo decide l'operatore, e sopra soglia un responsabile."""
+
+ETICHETTE = {  # quello che l'operatore legge mentre il grafo lavora: mai i dati
+    "triage": "Sto capendo la richiesta",
+    "dati_conto": "Sto leggendo i conti",
+    "policy": "Sto cercando nelle policy",
+    "istruttoria": "Sto analizzando i movimenti",
+    "prepara": "Sto preparando la segnalazione",
+    "chiedi": "La segnalazione aspetta un responsabile",
+    "scrivi": "Sto aprendo la segnalazione",
+    "sintesi": "Sto scrivendo la risposta",
+    "chiusura": "Chiudo con quello che ho",
+}
+
+
+STILI = {
+    "breve": " Rispondi in tre frasi al massimo, con i numeri esatti.",
+    "dettagliato": " Rispondi con tutti i dati dei contributi, in un elenco.",
+}
+
+
+def avanza(nodo: str) -> None:
+    """Una riga di avanzamento: arriva a chi ascolta con stream_mode="custom", gli altri no."""
+    get_stream_writer()({"fase": ETICHETTE[nodo]})
+
+
 def costo(messaggi: list[BaseMessage], modello: str) -> Decimal:
-    ingresso, uscita = PREZZI_PER_1K[modello]  # un modello senza prezzo si ferma qui
+    ingresso, uscita = PREZZI[modello]  # un modello senza prezzo si ferma qui
     totale = Decimal("0")
     for m in messaggi:
         uso = m.usage_metadata if isinstance(m, AIMessage) else None
@@ -129,12 +173,15 @@ def costruisci_grafo(
     checkpointer: BaseCheckpointSaver[Any] | None,
     modello: str = settings.default_model,
     modello_triage: str = settings.triage_model,
+    llm_ragiona: BaseChatModel | None = None,
+    modello_ragiona: str = settings.default_model,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
     """L'operatore entra qui, in closure: i tool nascono per lui e lo stato non lo contiene."""
     tools = build_tools_for(user, deps)
     by_name = {t.name: t for t in tools}
 
     async def triage(state: StatoBanca) -> dict[str, Any]:
+        avanza("triage")
         # pochi token, come il triage del supervisor: la risposta è una parola sola
         breve = llm_triage.bind(max_tokens=5)
         r = await breve.ainvoke([SystemMessage(PROMPT_TRIAGE), HumanMessage(state["domanda"])])
@@ -159,6 +206,7 @@ def costruisci_grafo(
 
         async def nodo(state: StatoBanca) -> dict[str, Any]:
             # lo specialista non vede gli altri contributi: riceve la domanda, e basta
+            avanza(nome)
             out = await agente.ainvoke({"messages": [HumanMessage(state["domanda"])]})
             vere = chiamate_vere(out["messages"])
             uscita, testo = come_e_finita(out)
@@ -179,6 +227,7 @@ def costruisci_grafo(
 
     async def prepara(state: StatoBanca) -> dict[str, Any]:
         # la chiamata al modello sta QUI, prima della sosta: alla ripresa non si ripaga
+        avanza("prepara")
         estrattore = llm.with_structured_output(
             SegnalazioneArgs, method="function_calling", include_raw=True
         )
@@ -214,6 +263,7 @@ def costruisci_grafo(
         if not _sopra_soglia(args):
             sotto: Decisione = {"approvato": True, "da": None, "motivo": None}
             return {"decisione": sotto, "visitati": ["chiedi"]}
+        avanza("chiedi")  # alla ripresa si riemette: è una riga per chi guarda, non un effetto
         risposta = interrupt(
             {  # tutto e solo quello che serve a chi decide
                 "azione": "apri_segnalazione_compliance",
@@ -233,6 +283,7 @@ def costruisci_grafo(
 
     async def scrivi(state: StatoBanca) -> dict[str, Any]:
         # l'unico nodo con un effetto, dopo la sosta e in un nodo suo
+        avanza("scrivi")
         decisione = state["decisione"]
         if decisione["approvato"]:
             try:
@@ -253,13 +304,64 @@ def costruisci_grafo(
         }
         return {"contributi": [contributo], "visitati": ["scrivi"]}
 
-    async def sintesi(state: StatoBanca) -> dict[str, Any]:
+    async def istruttoria(state: StatoBanca, runtime: Runtime[Contesto]) -> dict[str, Any]:
+        # il modello che ragiona, su questo specialista soltanto, con il budget dell'invocazione
+        avanza("istruttoria")
+        contesto = runtime.context or Contesto()
+        # lo sforzo lo capisce solo un modello che ragiona: a un altro, il fornitore lo rifiuta
+        modello_del_giorno = (
+            llm_ragiona.model_copy(
+                update={
+                    "reasoning_effort": contesto.sforzo,
+                    "max_tokens": contesto.max_token_istruttoria,
+                }
+            )
+            if llm_ragiona
+            else llm
+        )
+        agente = create_agent(
+            modello_del_giorno,
+            in_fila([by_name[t] for t in ("list_recent_movements", "search_documents")]),
+            system_prompt=PROMPT_ISTRUTTORIA,
+            middleware=[ModelCallLimitMiddleware(run_limit=PASSI_SPECIALISTA, exit_behavior="end")],
+        )
+        materiale = json.dumps(
+            {"domanda": state["domanda"], "contributi": state["contributi"]}, ensure_ascii=False
+        )
+        out = await agente.ainvoke({"messages": [HumanMessage(materiale)]})
+        vere = chiamate_vere(out["messages"])
+        uscita, testo = come_e_finita(out)
+        if uscita == "model" and not testo.strip():
+            # il ragionamento ha consumato il tetto d'uscita: pagato, e la risposta non c'è
+            testo = "L'istruttoria non ha prodotto una risposta entro il budget di ragionamento."
+            uscita = "max_steps"
+        contributo: Contributo = {
+            "specialista": "istruttoria",
+            "completo": uscita == "model",
+            "contenuto": testo,
+            "tool_calls": [c["name"] for m in vere for c in m.tool_calls],
+        }
+        return {
+            "contributi": [contributo],
+            "passi": len(vere),
+            "costo_eur": costo(out["messages"], modello_ragiona if llm_ragiona else modello),
+            "visitati": ["istruttoria"],
+        }
+
+    def chiusura(state: StatoBanca) -> dict[str, Any]:
+        avanza("chiusura")
+        return chiudi(state)
+
+    async def sintesi(state: StatoBanca, runtime: Runtime[Contesto]) -> dict[str, Any]:
+        avanza("sintesi")
+        contesto = runtime.context or Contesto()
+        stile = STILI[contesto.stile]  # una preferenza dell'operatore, non un'istruzione sua
         materiale = json.dumps(
             {"domanda": state["domanda"], "contributi": state["contributi"]}, ensure_ascii=False
         )
         # un tetto alla risposta, come la sintesi del supervisor
         r = await llm.bind(max_tokens=500).ainvoke(
-            [SystemMessage(PROMPT_SINTESI), HumanMessage(materiale)]
+            [SystemMessage(PROMPT_SINTESI + stile), HumanMessage(materiale)]
         )
         return {
             "risposta": r.text,
@@ -269,18 +371,19 @@ def costruisci_grafo(
             "visitati": ["sintesi"],
         }
 
-    g = StateGraph(StatoBanca)
+    g = StateGraph(StatoBanca, context_schema=Contesto)
     g.add_node("triage", triage)
     for nome in ("dati_conto", "policy"):
         g.add_node(nome, specialista(nome))  # il nome passa come argomento, non in una lambda
     g.add_node("prepara", prepara)
     g.add_node("chiedi", chiedi)
     g.add_node("scrivi", scrivi)
+    g.add_node("istruttoria", istruttoria)
     g.add_node("sintesi", sintesi)
-    g.add_node("chiusura", chiudi)
+    g.add_node("chiusura", chiusura)
 
     g.add_edge(START, "triage")
-    for da in ("triage", "dati_conto", "policy", "prepara", "chiedi", "scrivi"):
+    for da in ("triage", "dati_conto", "policy", "istruttoria", "prepara", "chiedi", "scrivi"):
         g.add_conditional_edges(da, instrada, successori(da))  # un insieme chiuso, per nodo
     g.add_edge("sintesi", END)
     g.add_edge("chiusura", END)
@@ -309,6 +412,7 @@ async def checkpointer_postgres() -> AsyncIterator[AsyncPostgresSaver]:
 # le tabelle che LangGraph si crea da sé: non sono nei modelli, quindi Alembic non le conosce
 TABELLE_DI_LANGGRAPH = frozenset(
     {"checkpoints", "checkpoint_blobs", "checkpoint_writes", "checkpoint_migrations"}
+    | {"store", "store_migrations"}  # la memoria fra conversazioni
 )
 
 
