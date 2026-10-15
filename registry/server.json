@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "it.liparibank/conti-e-procedure",
+  "title": "LipariBank, conti e procedure",
+  "description": "Conti e saldi del portafoglio di chi chiama, e ricerca nelle procedure della banca.",
+  "version": "2.0.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.liparibank.internal/mcp"
+    }
+  ],
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "it.liparibank/governo": {
+        "proprietario": "Team piattaforma agenti",
+        "scope": ["conti:leggi", "policy:leggi"],
+        "sola_lettura": true,
+        "versioni_servite": {"search_policy": ["2", "1"]}
+      }
+    }
+  }
+}

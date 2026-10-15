@@ -29,7 +29,7 @@ curl -s localhost:8000/health        # "status":"UP"
 uv run python -m scripts.ingest_docs
 ```
 
-Il caricamento dei documenti calcola gli embedding con il modello configurato, quindi chiede la chiave API nel `.env`. Le credenziali degli utenti di sviluppo sono in `scripts/seed_users.py`, e valgono solo sulla tua macchina.
+Il caricamento dei documenti calcola gli embedding con il modello configurato, quindi chiede la chiave API nel `.env`. La password degli utenti di sviluppo non sta nel codice: sta nel `.env` (`SEED_PASSWORD`, almeno 12 caratteri), e vale solo sulla tua macchina; `uv run python -m scripts.seed_users --ruota` la riscrive su chi c'è già.
 
 ## Test e controlli
 
@@ -123,9 +123,71 @@ Il motore HTTP (`/api/ai/agent`) continua a girare sul ciclo scritto a mano
 (`src/agents/loop.py`): il grafo è la quarta implementazione dello stesso comportamento,
 misurata dalle eval insieme alle altre tre e coperta dai suoi test.
 
+## Scoperta
+
+Il server pubblicato (`uv run python -m liparibank_mcp.pubblico`, porta 8200) rifiuta chi non
+porta un token emesso per lui. Senza token, la risposta è un 401 che punta ai metadati OAuth
+del server; i metadati, a quel punto, dicono dove si prende il token e quali scope il server
+riconosce:
+
+```text
+$ curl.exe -si http://127.0.0.1:8200/mcp
+HTTP/1.1 401 Unauthorized
+date: Thu, 15 Oct 2026 08:10:48 GMT
+server: uvicorn
+content-length: 0
+www-authenticate: Bearer resource_metadata="http://127.0.0.1:8200/.well-known/oauth-protected-resource/mcp"
+
+$ curl.exe -s http://127.0.0.1:8200/.well-known/oauth-protected-resource/mcp
+{"resource":"http://127.0.0.1:8200/mcp","authorization_servers":["http://127.0.0.1:8000/"],"scopes_supported":["conti:leggi","policy:leggi"],"bearer_methods_supported":["header"],"resource_name":"LipariBank, conti e procedure"}
+```
+
+Con un token non valido, fastmcp risponde 401 e nel messaggio suggerisce di «ri-registrarsi»
+e ottenere nuovi token — parla della registrazione dinamica OAuth, che questo server **non
+offre**: il client si registra solo in `CLIENTI` (in `src/auth/mcp_tokens.py`), scambia il
+token via `POST /api/auth/token-mcp` sulla API a 8000, e quel token (audience `…/mcp`, 10
+minuti) è l'unico che entra:
+
+```text
+$ curl.exe -si -X POST http://127.0.0.1:8200/mcp -H "Content-Type: application/json" ^
+    -H "Accept: application/json, text/event-stream" ^
+    -H "Authorization: Bearer token-non-valido" ^
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",...}"
+HTTP/1.1 401 Unauthorized
+www-authenticate: Bearer error="invalid_token", error_description="Authentication failed. The provided bearer token is invalid, expired, or no longer recognized by the server. To resolve: clear authentication tokens in your MCP client and reconnect. Your client should automatically re-register and obtain new tokens.", resource_metadata="http://127.0.0.1:8200/.well-known/oauth-protected-resource/mcp"
+
+{"error": "invalid_token", "error_description": "Authentication failed. The provided bearer token is invalid, expired, or no longer recognized by the server. To resolve: clear authentication tokens in your MCP client and reconnect. Your client should automatically re-register and obtain new tokens."}
+```
+
 ## Misure
 
-Le due esecuzioni di `uv run python -m evals.confronto` del **08/10/2026**, entrambe dopo
+### Superficie pubblicata — 15/10/2026
+
+`uv run python -m evals.superficie`: il server vero, su HTTP nello stesso processo; per ogni
+coppia client-ruolo emette il token come farebbe lo scambio e legge i tool che il server
+mostra. È la tabella che un auditor legge: esce dal sistema, non da un documento.
+
+```text
+client | ruolo | tool visti | che scrivono | agente A2A
+agente-compliance | compliance_lead | nessuno | 0 | sì
+agente-compliance | operator | nessuno | 0 | sì
+agente-compliance | risk_lead | nessuno | 0 | no
+assistente-filiale | compliance_lead | search_policy v2/1 | 0 | sì
+assistente-filiale | operator | find_customer_accounts, get_account_balance, search_policy v2/1 | 0 | sì
+assistente-filiale | risk_lead | search_policy v2/1 | 0 | no
+supporto-procedure | compliance_lead | search_policy v2/1 | 0 | no
+supporto-procedure | operator | search_policy v2/1 | 0 | no
+supporto-procedure | risk_lead | search_policy v2/1 | 0 | no
+coppie client-ruolo: 9 · tool esposti in tutto: 8
+```
+
+Il muro del portafoglio e quello dei documenti valgono anche da fuori: `find_customer_accounts`
+e `get_account_balance` esistono solo per chi ha `conti:leggi` (assistente-filiale, ruolo
+operator), e il retrieval filtrato per ruolo vale anche sul tool pubblicato.
+
+### Eval confronto — 08/10/2026
+
+Le due esecuzioni di `uv run python -m evals.confronto`, entrambe dopo
 `uv run python -m scripts.ingest_docs` (6 documenti in `data/docs/`, 9 casi in
 `evals/datasets/agent_traiettorie.jsonl`). «ricerche» = `search_documents` eseguite per caso;
 il costo è quello misurato per caso dall'harness.

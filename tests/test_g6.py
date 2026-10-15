@@ -63,16 +63,22 @@ def client() -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
-async def _seed_utenti() -> None:
-    from scripts.seed_users import main
+# la password dei test: la riceve il seed da qui, perché sulla tua macchina il .env ha quella vera
+PASSWORD_DEI_TEST = "solo-per-i-test-del-login"
 
-    await main()
+
+async def _seed_utenti() -> None:
+    from scripts.seed_users import semina
+
+    await semina(PASSWORD_DEI_TEST, ruota=True)  # un test di prima può averne lasciata un'altra
 
 
 async def _token(username: str) -> str:
     app.dependency_overrides.pop(get_current_user, None)
     async with client() as c:
-        r = await c.post("/api/auth/login", data={"username": username, "password": "bootcamp"})
+        r = await c.post(
+            "/api/auth/login", data={"username": username, "password": PASSWORD_DEI_TEST}
+        )
     assert r.status_code == 200, r.text
     return str(r.json()["access_token"])
 
@@ -101,7 +107,9 @@ async def test_il_login_da_un_token_e_non_dice_quale_credenziale_e_sbagliata(
 
     monkeypatch.setattr(auth_api, "verify_password", contata)
     async with client() as c:
-        ok = await c.post("/api/auth/login", data={"username": "mbianchi", "password": "bootcamp"})
+        ok = await c.post(
+            "/api/auth/login", data={"username": "mbianchi", "password": PASSWORD_DEI_TEST}
+        )
         errata = await c.post("/api/auth/login", data={"username": "mbianchi", "password": "x"})
         nessuno = await c.post("/api/auth/login", data={"username": "nessuno", "password": "x"})
     assert ok.status_code == 200 and ok.json()["token_type"] == "bearer"
