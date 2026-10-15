@@ -16,7 +16,15 @@
         "proprietario": "Team piattaforma agenti",
         "scope": ["conti:leggi", "policy:leggi"],
         "sola_lettura": true,
-        "versioni_servite": {"search_policy": ["2", "1"]}
+        "versioni_servite": {
+          "find_customer_accounts": ["2", "1"],
+          "search_policy": ["2", "1"]
+        },
+        "disdette": {
+          "find_customer_accounts": {
+            "1": "2026-11-15"
+          }
+        }
       }
     }
   }

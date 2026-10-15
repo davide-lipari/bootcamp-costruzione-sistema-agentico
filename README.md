@@ -185,6 +185,36 @@ Il muro del portafoglio e quello dei documenti valgono anche da fuori: `find_cus
 e `get_account_balance` esistono solo per chi ha `conti:leggi` (assistente-filiale, ruolo
 operator), e il retrieval filtrato per ruolo vale anche sul tool pubblicato.
 
+### Dopo l'estensione (strada C) — 15/10/2026
+
+Stesso comando, stesso server, dopo aver affiancato alla v1 di `find_customer_accounts` una v2
+con un cambio che rompe (testo → JSON), con data di disdetta della v1 nel registry.
+
+```text
+client | ruolo | tool visti | che scrivono | agente A2A
+agente-compliance | compliance_lead | nessuno | 0 | sì
+agente-compliance | operator | nessuno | 0 | sì
+agente-compliance | risk_lead | nessuno | 0 | no
+assistente-filiale | compliance_lead | search_policy v2/1 | 0 | sì
+assistente-filiale | operator | find_customer_accounts v2/1, get_account_balance, search_policy v2/1 | 0 | sì
+assistente-filiale | risk_lead | search_policy v2/1 | 0 | no
+supporto-procedure | compliance_lead | search_policy v2/1 | 0 | no
+supporto-procedure | operator | search_policy v2/1 | 0 | no
+supporto-procedure | risk_lead | search_policy v2/1 | 0 | no
+coppie client-ruolo: 9 · tool esposti in tutto: 8
+```
+
+### Delta superficie (prima → dopo, 15/10/2026)
+
+| client | ruolo | prima | dopo | perché |
+|---|---|---|---|---|
+| assistente-filiale | operator | `find_customer_accounts` | `find_customer_accounts v2/1` | il tool ora serve due versioni: la 1 (testo, con disdetta) e la 2 (JSON). Nessun client o ruolo nuovo vede un tool nuovo: la superficie non cresce, cambia solo la dicitura delle versioni sotto lo stesso nome. |
+
+Il totale resta 8 e le coppie restano 9: la strada C non aggiunge superficie, aggiunge una
+versione. La riga che un auditor legge cambia in una sola cella, e la voce di registry
+(`registry/server.json`) dichiara quali versioni si servono e fino a quando la 1
+(`disdette.find_customer_accounts.1 = "2026-11-15"`).
+
 ### Eval confronto — 08/10/2026
 
 Le due esecuzioni di `uv run python -m evals.confronto`, entrambe dopo
@@ -344,4 +374,72 @@ tutta la serie.
   l'architettura: fra 0.0024 e 0.0026 EUR su nove casi. Quello che questi numeri dicono con
   certezza è il punteggio e quante ricerche servono.
 - Il per-caso lo stampa lo stesso comando; le soglie del cancello sono in `evals/runner.py`.
+
+## Strada C — Una versione che rompe
+
+### Il comando
+
+```bash
+uv run pytest tests/test_g4_strada_c.py -q
+```
+
+### Le tre righe del criterio 4
+
+1. La v2 di `find_customer_accounts` cambia la forma della risposta sotto lo stesso nome (testo →
+   JSON), e la v1 resta servita: `test_le_due_versioni_di_find_customer_accounts_convivono`
+   chiama la 1 e la 2 e vede due forme diverse; se togli la registrazione della v1, il
+   `version="1"` non trova più niente e il test cade.
+2. Chi non sceglie la versione prende la più alta (la 2, JSON) e il client che parsava il testo
+   si rompe: `test_senza_versione_arriva_la_piu_alta_e_questo_rompe_il_vecchio` fissa questo
+   comportamento di default ed è il motivo per cui la v1 ha una data di disdetta.
+3. La voce di registry dichiara `versioni_servite.find_customer_accounts = ["2", "1"]` e
+   `disdette.find_customer_accounts.1 = "2026-11-15"`; `test_la_disdetta_registrata_corrisponde_al_server_vivo`
+   legge `come_e_fatto` dal server vivo e si accorge se la voce mente.
+
+### 🧠 Prima di cominciare
+
+**La strada scelta: C — Una versione che rompe.** Ho scelto C perché è la sola delle quattro
+che si misura interamente con test deterministici e nessuna dipendenza esterna: la A chiede un
+host di terze parti vero e la chiave dell'embedding per far rispondere il modello; la B
+richiede un 403 scritto a mano in HTTP, lo scope di step-up nello scambio e l'integrazione col
+blocco dell'approvazione, tre trappole insieme; la D tocca callback autenticate, protezione
+SSRF e persistenza del task oltre un processo. Con i modelli locali che già usiamo (finti di
+`tests/finti.py`), la C gira senza chiavi API e senza servizi esterni.
+
+**La misura che uso:** la superficie di `evals/superficie.py` prima e dopo (il delta è una
+cella: `find_customer_accounts` → `find_customer_accounts v2/1`), più la data di disdetta
+della v1 nella voce di registry come numero della convivenza (fino al 2026-11-15).
+
+**La trappola trovata e come l'ho aggirata:** volevo far restituire alla v2 un modello
+Pydantic strutturato, ma il client fastmcp cerca lo schema di output per nome (non nome+versione)
+e con due forme sotto lo stesso nome valida la risposta della v1 contro lo schema della v2:
+la convivenza si rompeva a livello di client, non di server. La soluzione è che entrambe le
+versioni restituiscano una stringa: la rottura sta nel contenuto (testo vs documento JSON),
+non nel tipo di output, e la convivenza regge per i client fastmcp come per quelli che leggono
+il testo.
+
+## Revisione del codice scritto con l'AI
+
+Riaperto il codice della strada C con le quattro domande della revisione:
+
+- **Un token che vale troppo.** Il token MCP emesso per la v2 ha la stessa audience, lo stesso
+  `azp` e la stessa durata (10 minuti) di quello della v1: la nuova versione non aggiunge scope
+  (`conti:leggi` già presente) né allunga la scadenza. Non finisce in file, log o stati: i test
+  lo generano in memoria e lo buttano.
+- **Un'identità che non viene dal token.** La v2 chiama `identita()`, che legge `sub` e `role`
+  dal token già verificato dal transport, e passa `utente.username` a `of_customer`: non c'è
+  nessun punto in cui l'identità arrivi da un parametro del corpo o da un default.
+- **Un contratto cambiato in silenzio.** Il cambio di forma è dichiarato: la v2 è una nuova
+  registrazione con `version="2"`, la v1 resta con `version="1"`, e la voce di registry elenca
+  entrambe con la data di disdetta. Nessuna descrizione o forma è cambiata sotto la stessa
+  versione.
+- **Un errore che racconta.** La v2 non ha eccezioni nuove: i rifiuti del portafoglio sono
+  conti vuoti nel JSON (come la v1 restituiva la stringa di rifiuto), e le eccezioni non
+  previste passano dal `mask_error_details` del server come «Error calling tool», senza il
+  messaggio originale.
+- **Rilievo non corretto, e perché.** La v2 serializza il JSON con `model_dump_json()` e il
+  client lo riparsa con `json.loads`: un passaggio in più rispetto a un output strutturato
+  nativo. L'ho lasciato così perché un output schema Pydantic sulla v2 rompeva la convivenza
+  con la v1 per i client fastmcp (vedi la trappola sopra): preferisco un parse in più a un
+  client vecchio che si rompe.
 

@@ -381,8 +381,9 @@ async def test_la_voce_di_registry_e_valida_e_dice_il_vero() -> None:
 async def test_la_superficie_e_quella_registrata() -> None:
     righe = {(r.client_id, r.ruolo): r for r in await superficie.misura()}
     policy = "search_policy v2/1"
+    conti = "find_customer_accounts v2/1"
     assert righe["assistente-filiale", "operator"].tool == (
-        "find_customer_accounts",
+        conti,
         "get_account_balance",
         policy,
     )

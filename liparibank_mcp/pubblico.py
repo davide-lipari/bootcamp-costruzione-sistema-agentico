@@ -43,6 +43,29 @@ class RicercaArgsV2(RicercaArgs):
     quanti: int = Field(default=3, ge=1, le=5, description="Quanti passaggi, da 1 a 5.")
 
 
+class ContoInV2(BaseModel):
+    """Un conto nella versione 2: due campi, invece di una riga di testo da leggere."""
+
+    iban: str = Field(description="Il codice IBAN del conto.")
+    etichetta: str = Field(description="L'etichetta del conto, es. «Conto principale».")
+
+
+class ContiDelClienteV2(BaseModel):
+    """La risposta della versione 2: campi, invece che una stringa da leggere.
+
+    Questo è il cambio che rompe: la v1 restituiva testo («Conti del cliente X» più una riga
+    per conto), questa restituisce un documento JSON. Sotto lo stesso nome
+    `find_customer_accounts`, un client che non sceglie la versione e parsava il testo si rompe
+    quando riceve il JSON: per questo la v1 resta servita, con una data di disdetta, e un client
+    vecchio la può chiedere finché non migra.
+    """
+
+    cliente: str = Field(description="Il codice cliente richiesto.")
+    conti: list[ContoInV2] = Field(
+        description="I conti del portafoglio; vuoto se il cliente non risulta."
+    )
+
+
 def identita() -> UserContext:
     """Chi chiama, dal token che il transport ha già verificato. Senza token non c'è nessuno:
     capita al client in memoria, che non passa da HTTP, e qui si rifiuta come un estraneo."""
@@ -137,8 +160,13 @@ def crea_server(base_url: str = RISORSA_MCP.removesuffix("/mcp")) -> FastMCP:
             return NIENTE_NEI_DOCUMENTI
         return "\n\n".join(f"[{r.document_id}] {r.content[:300]}" for r in passaggi)
 
-    @mcp.tool(annotations=SOLA_LETTURA, auth=require_scopes("conti:leggi"))
-    async def find_customer_accounts(customer_id: str) -> str:
+    @mcp.tool(
+        name="find_customer_accounts",
+        version="1",
+        annotations=SOLA_LETTURA,
+        auth=require_scopes("conti:leggi"),
+    )
+    async def find_customer_accounts_v1(customer_id: str) -> str:
         """I conti di un cliente, con IBAN ed etichetta, se il cliente è nel portafoglio di chi
         chiama.
 
@@ -149,6 +177,34 @@ def crea_server(base_url: str = RISORSA_MCP.removesuffix("/mcp")) -> FastMCP:
         """
         args = _argomenti(ClienteArgs, customer_id=customer_id)
         return await _esegui("find_customer_accounts", args)
+
+    @mcp.tool(
+        name="find_customer_accounts",
+        version="2",
+        annotations=SOLA_LETTURA,
+        auth=require_scopes("conti:leggi"),
+    )
+    async def find_customer_accounts_v2(customer_id: str) -> str:
+        """I conti di un cliente come documento JSON (campi cliente, iban, etichetta), se nel
+        portafoglio di chi chiama.
+
+        Usa questa versione quando il chiamante è un programma che legge i campi, non una
+        persona che legge una riga di testo. Il cliente non nel portafoglio ha conti vuoti: il
+        muro vale anche qui.
+
+        Args:
+            customer_id: il codice cliente, come compare nella sua scheda.
+        """
+        args = _argomenti(ClienteArgs, customer_id=customer_id)
+        utente = identita()
+        async with AsyncSessionLocal() as db:
+            deps = crea_deps(db)
+            conti = await deps.accounts.of_customer(utente.username, args.customer_id)
+        risposta = ContiDelClienteV2(
+            cliente=args.customer_id,
+            conti=[ContoInV2(iban=c.id, etichetta=c.label) for c in conti],
+        )
+        return risposta.model_dump_json()
 
     @mcp.tool(annotations=SOLA_LETTURA, auth=require_scopes("conti:leggi"))
     async def get_account_balance(account_id: str) -> str:
